@@ -20,6 +20,11 @@ fn quote_api_url() -> String {
     env::var("QUOTE_API_URL").unwrap_or_else(|_| "https://api.jup.ag/swap/v1".to_string())
 }
 
+// Reference: https://quote-api.jup.ag/docs/static/index.html
+fn price_api_url() -> String {
+    env::var("PRICE_API_URL").unwrap_or_else(|_| "https://api.jup.ag/price/v3".to_string())
+}
+
 /// The Errors that may occur while using this crate
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -43,6 +48,30 @@ pub enum Error {
 
     #[error("parse SwapMode: Invalid value `{value}`")]
     ParseSwapMode { value: String },
+
+    #[error("Missing token pubkey: {0}")]
+    MissingArgument(String),
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Price {
+    pub created_at: String,
+    pub liquidity: f64,
+    #[serde(rename = "usdPrice")]
+    pub price: f64,
+    pub block_id: u64,
+    pub decimals: u64,
+    #[serde(rename = "priceChange24h")]
+    pub change: f64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Prices {
+    #[serde(rename = "So11111111111111111111111111111111111111112")]
+    pub sol: Option<Price>,
+    #[serde(rename = "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn")]
+    pub jitosol: Option<Price>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -151,6 +180,30 @@ where
     } else {
         serde_json::from_value(value).map_err(|err| err.into())
     }
+}
+
+/// Get simple price for a given input mint, output mint, and amount
+pub async fn price(tokens: Vec<Pubkey>, api_key: String) -> Result<Prices> {
+    let mut tokens_iter = tokens.iter();
+    let init = tokens_iter.next();
+    if init.is_none() {
+        return Err(Error::MissingArgument("tokens".to_string()));
+    }
+    let url = format!(
+        "{base_url}?ids={ids}",
+        base_url = price_api_url(),
+        ids = tokens_iter.fold(init.unwrap().to_string(), |acc, e| format!("{acc},{e}")),
+    );
+    maybe_jupiter_api_error(
+        reqwest::Client::builder()
+            .build()?
+            .get(url)
+            .header("x-api-key", api_key)
+            .send()
+            .await?
+            .json()
+            .await?,
+    )
 }
 
 #[derive(Serialize, Deserialize, Default, PartialEq, Clone, Debug)]
